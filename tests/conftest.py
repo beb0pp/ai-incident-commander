@@ -1,20 +1,34 @@
 """Shared fixtures.
 
-Everything here is offline: a scripted model and the bundled scenario. No
-fixture reaches the network or a database.
+Everything here is offline: a scripted model, in-memory adapters, and the
+bundled simulated environment. No fixture reaches the network or a database.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 
+from aic.bootstrap import Container, build_container
+from aic.config import LLMProvider, Settings
 from aic.domain.models import Incident, Signal
 from aic.guardrails.policy import ActionPolicy
 from aic.llm.fake import ScriptedLLMClient
 from aic.orchestration.state import InvestigationState
 from aic.scenario import demo_incident, demo_signals
+from aic.tools.environment import demo_environment
+
+
+@pytest.fixture
+def settings() -> Settings:
+    return Settings(llm_provider=LLMProvider.FAKE, log_format="console")
+
+
+@pytest.fixture
+def container(settings: Settings) -> Container:
+    """The real composition root, wired to in-memory adapters."""
+    return build_container(settings, environment=demo_environment())
 
 
 @pytest.fixture
@@ -43,6 +57,23 @@ def signals() -> list[Signal]:
 def state(incident: Incident, signals: list[Signal]) -> InvestigationState:
     """A fresh investigation over the bundled scenario."""
     return InvestigationState(run_id="test-run", incident=incident, signals=signals)
+
+
+@pytest.fixture
+async def api_client(container: Container) -> AsyncIterator[object]:
+    """An httpx client bound to the real app with the offline container."""
+    import httpx
+
+    from aic.api.app import create_app
+
+    app = create_app(container.settings, container=container)
+    transport = httpx.ASGITransport(app=app)
+    # The lifespan is what installs app.state.container.
+    async with (
+        httpx.AsyncClient(transport=transport, base_url="http://test") as client,
+        app.router.lifespan_context(app),
+    ):
+        yield client
 
 
 @pytest.fixture(autouse=True)

@@ -1,0 +1,61 @@
+{
+  "title": "checkout-api returning 5xx on order submission",
+  "description": "Error rate on POST /orders jumped from ~0.1% to ~18% at 14:02 UTC. Cart and catalog are unaffected. A deploy went out at 13:54.",
+  "severity": "sev2",
+  "services": ["checkout-api", "prod-aurora-orders"],
+  "signals": [
+    {
+      "kind": "event",
+      "service": "checkout-api",
+      "timestamp": "2026-08-13T13:54:00Z",
+      "message": "deployment completed: checkout-api:412 (pool size 5 -> 20)",
+      "labels": {"source": "ci-pipeline"}
+    },
+    {
+      "kind": "log",
+      "service": "checkout-api",
+      "timestamp": "2026-08-13T14:02:00Z",
+      "message": "timeout acquiring connection from pool after 30000ms",
+      "labels": {"level": "error", "count": "1284"}
+    },
+    {
+      "kind": "metric",
+      "service": "checkout-api",
+      "timestamp": "2026-08-13T14:02:00Z",
+      "message": "HTTPCode_Target_5XX_Count",
+      "value": 412.0,
+      "labels": {"threshold": "25"}
+    },
+    {
+      "kind": "metric",
+      "service": "checkout-api",
+      "timestamp": "2026-08-13T14:03:00Z",
+      "message": "RunningTaskCount below DesiredTaskCount",
+      "value": 8.0,
+      "labels": {"desired": "12"}
+    },
+    {
+      "kind": "metric",
+      "service": "prod-aurora-orders",
+      "timestamp": "2026-08-13T14:01:00Z",
+      "message": "DatabaseConnections",
+      "value": 199.0,
+      "labels": {"max_connections": "200"}
+    },
+    {
+      "kind": "metric",
+      "service": "prod-aurora-orders",
+      "timestamp": "2026-08-13T14:02:00Z",
+      "message": "WriteLatency",
+      "value": 148.7,
+      "labels": {"unit": "ms", "baseline": "12"}
+    },
+    {
+      "kind": "log",
+      "service": "prod-aurora-orders",
+      "timestamp": "2026-08-13T14:02:00Z",
+      "message": "FATAL: remaining connection slots are reserved for superuser connections",
+      "labels": {"level": "error"}
+    }
+  ]
+}
