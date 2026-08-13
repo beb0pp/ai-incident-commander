@@ -1,0 +1,72 @@
+name: ai-incident-commander
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      AIC_ENV: docker
+      AIC_LOG_FORMAT: json
+      # Defaults to the scripted model so `docker compose up` works with no
+      # credentials. Set AIC_LLM_PROVIDER=anthropic in .env to use Claude.
+      AIC_LLM_PROVIDER: ${AIC_LLM_PROVIDER:-fake}
+      AIC_LLM_MODEL: ${AIC_LLM_MODEL:-claude-opus-5}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AIC_DATABASE_URL: postgresql://aic:aic@postgres:5432/aic
+      AIC_REDIS_URL: redis://redis:6379/0
+      AIC_RUNBOOK_DIRECTORY: /app/docs/runbooks
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Applies pending SQL migrations, then exits. The API does not race it because
+  # `depends_on: service_completed_successfully` gates on this container's exit.
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["python", "-m", "aic.cli", "migrate"]
+    environment:
+      AIC_DATABASE_URL: postgresql://aic:aic@postgres:5432/aic
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aic
+      POSTGRES_PASSWORD: aic
+      POSTGRES_DB: aic
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aic -d aic"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:
