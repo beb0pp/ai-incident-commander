@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from aic.domain.models import RunbookMatch
+from aic.rag.embeddings import tokenize
 from aic.rag.indexer import extract_steps
 from aic.rag.store import VectorStore
 
@@ -28,11 +29,20 @@ class RunbookRetriever:
         self._min_score = min_score
 
     def retrieve(self, query: str) -> list[RunbookMatch]:
+        # The embedder is lexical (hashed bag of words), so a chunk that shares no
+        # vocabulary with the query cannot be a genuine match — any similarity it
+        # scores is a hash collision. Requiring one real shared token removes that
+        # entire class of false positive, which a score threshold alone does not:
+        # collisions routinely land above any threshold low enough to be useful.
+        query_tokens = set(tokenize(query))
+
         matches: list[RunbookMatch] = []
         for scored in self._store.search(query, limit=self._limit):
             if scored.score < self._min_score:
                 continue
             text = scored.chunk.text
+            if query_tokens and not query_tokens & set(tokenize(text)):
+                continue
             matches.append(
                 RunbookMatch(
                     document_id=scored.chunk.id,

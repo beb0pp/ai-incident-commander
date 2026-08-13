@@ -115,6 +115,26 @@ class TestRetrieval:
         assert any(m.steps for m in matches)
         assert all(len(m.excerpt) <= 610 for m in matches)
 
+    def test_nonsense_query_retrieves_nothing(self, retriever: RunbookRetriever) -> None:
+        """Handing the model a noisy runbook is worse than handing it none."""
+        assert retriever.retrieve("zzzzqqqq wibble frobnicate") == []
+
+    def test_every_match_shares_real_vocabulary_with_the_query(
+        self, retriever: RunbookRetriever
+    ) -> None:
+        """The guard against hash-collision false positives (see ADR 0004).
+
+        A score threshold alone does not remove them: collisions routinely land
+        above any threshold low enough to be useful.
+        """
+        query = "aurora connection pool exhausted after deployment"
+        query_tokens = set(tokenize(query))
+
+        matches = retriever.retrieve(query)
+        assert matches
+        for match in matches:
+            assert query_tokens & set(tokenize(match.excerpt)), match.title
+
     def test_scores_are_descending(self, retriever: RunbookRetriever) -> None:
         matches = retriever.retrieve("deployment rollback ecs task definition")
         assert [m.score for m in matches] == sorted((m.score for m in matches), reverse=True)
