@@ -1,0 +1,88 @@
+[project]
+name = "ai-incident-commander"
+version = "0.1.0"
+description = "Multi-agent platform for investigating and responding to application and infrastructure incidents."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [{ name = "Luis Abreu" }]
+keywords = ["ai-agents", "incident-response", "sre", "observability", "rag", "tool-calling"]
+
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+  "anthropic>=0.40",
+  "asyncpg>=0.30",
+  "redis>=5.2",
+  "structlog>=24.4",
+  "prometheus-client>=0.21",
+  "tenacity>=9.0",
+  "opentelemetry-api>=1.28",
+  "opentelemetry-sdk>=1.28",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "pytest-cov>=6.0",
+  "httpx>=0.27",
+  "ruff>=0.8",
+  "mypy>=1.13",
+]
+
+[project.scripts]
+aic = "aic.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aic"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# The default run is offline and hermetic. Opt into the rest with
+# `pytest -m integration` once `docker compose up -d postgres redis` is running.
+addopts = "-m 'not integration'"
+markers = [
+  "integration: requires Postgres and Redis (docker compose up -d postgres redis)",
+]
+filterwarnings = ["error::DeprecationWarning:aic.*"]
+
+[tool.coverage.run]
+source = ["src/aic"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "C4", "SIM", "RUF", "ASYNC", "S"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+packages = ["aic"]
+strict = true
+warn_unreachable = true
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = ["asyncpg.*", "redis.*", "prometheus_client.*"]
+ignore_missing_imports = true
