@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+from pathlib import Path
 from typing import Any
 
 from aic import __version__
@@ -32,6 +33,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Override AIC_LLM_PROVIDER for this run.",
     )
 
+    init = sub.add_parser("init", help="Write a starter aic.yaml.")
+    init.add_argument("--force", action="store_true", help="Overwrite an existing file.")
+
+    doctor = sub.add_parser(
+        "doctor", help="Check that every configured source is reachable and permitted."
+    )
+    doctor.add_argument("--manifest", type=Path, help="Path to aic.yaml.")
+
     sub.add_parser("serve", help="Run the HTTP API with uvicorn.")
     sub.add_parser("migrate", help="Apply pending database migrations.")
 
@@ -39,11 +48,78 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "demo":
         return asyncio.run(_run_demo(provider=args.provider))
+    if args.command == "init":
+        return _init(force=args.force)
+    if args.command == "doctor":
+        return asyncio.run(_doctor(manifest_path=args.manifest))
     if args.command == "serve":
         return _serve()
     if args.command == "migrate":
         return asyncio.run(_migrate())
     return 1
+
+
+def _init(*, force: bool) -> int:
+    """Write a starter manifest next to wherever the user is standing."""
+    from aic.manifest import EXAMPLE
+
+    target = Path("aic.yaml")
+    if target.exists() and not force:
+        sys.stdout.write(f"{target} already exists. Pass --force to overwrite it.\n")
+        return 1
+
+    target.write_text(EXAMPLE, encoding="utf-8")
+    sys.stdout.write(
+        f"Wrote {target}.\n\n"
+        "Next: uncomment the aws source, set your region, then run `aic doctor`.\n"
+    )
+    return 0
+
+
+async def _doctor(*, manifest_path: Path | None) -> int:
+    """Report on every source before an incident does it for you."""
+    from aic.diagnostics import CheckStatus, missing_actions, run_checks
+    from aic.manifest import find_manifest, load_manifest
+
+    settings = load_settings(log_format="console")
+    configure_logging(level="WARNING", json_output=False)
+
+    resolved = manifest_path or settings.manifest_path or find_manifest()
+    manifest = load_manifest(resolved)
+
+    out = sys.stdout.write
+    out(f"\nmanifest: {resolved or 'none found — using the simulated source'}\n")
+    out(f"sources:  {', '.join(s.type for s in manifest.sources)}\n\n")
+
+    checks = await run_checks(manifest)
+
+    width = max((len(c.capability) for c in checks), default=10)
+    symbols = {
+        CheckStatus.OK: "  ok  ",
+        CheckStatus.DENIED: " DENY ",
+        CheckStatus.UNAVAILABLE: " FAIL ",
+        CheckStatus.SKIPPED: " skip ",
+    }
+    current = ""
+    for check in checks:
+        if check.source != current:
+            out(f"{check.source}\n")
+            current = check.source
+        out(f"  [{symbols[check.status]}] {check.capability:<{width}}  {check.detail}\n")
+
+    needed = missing_actions(checks)
+    if needed:
+        out("\nAdd these IAM actions and run doctor again:\n")
+        for action in needed:
+            out(f"  - {action}\n")
+
+    failed = [c for c in checks if not c.healthy]
+    if failed:
+        out(f"\n{len(failed)} check(s) failed.\n\n")
+        return 1
+
+    out("\nAll checks passed. Run `aic demo` or `aic serve`.\n\n")
+    return 0
 
 
 async def _run_demo(*, provider: str | None) -> int:

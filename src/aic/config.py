@@ -58,7 +58,13 @@ class Settings(BaseSettings):
     max_agent_retries: int = Field(default=2, ge=0, le=5)
     investigation_timeout_seconds: float = Field(default=300.0, gt=0)
 
+    # -- Environment manifest ---------------------------------------------
+    #: Path to aic.yaml. Unset means "search upward from the working
+    #: directory", and finding nothing means the simulated source.
+    manifest_path: Path | None = None
+
     # -- Corpus -----------------------------------------------------------
+    #: Fallback when the manifest names no runbook locations.
     runbook_directory: Path = REPO_ROOT / "docs" / "runbooks"
     embedding_dimensions: int = Field(default=512, ge=64, le=4096)
 

@@ -10,10 +10,10 @@ from pydantic import BaseModel, ConfigDict
 from aic.domain.errors import GuardrailViolationError, ToolExecutionError
 from aic.domain.models import RiskLevel
 from aic.llm.base import ToolCall
-from aic.tools.aws import build_infrastructure_tools
 from aic.tools.base import NoArgs, Tool
-from aic.tools.environment import demo_environment
+from aic.tools.inspection import build_inspection_tools
 from aic.tools.registry import ToolRegistry
+from aic.tools.simulated import SimulatedInfrastructure
 
 
 class EchoArgs(BaseModel):
@@ -61,7 +61,7 @@ class TestRiskGate:
         assert "restart_service" in registry
 
     def test_every_bundled_infrastructure_tool_is_read_only(self) -> None:
-        for tool in build_infrastructure_tools(demo_environment()):
+        for tool in build_inspection_tools(SimulatedInfrastructure()):
             assert tool.risk is RiskLevel.READ_ONLY, tool.name
 
     def test_duplicate_registration_is_rejected(self) -> None:
@@ -116,7 +116,7 @@ class TestDispatch:
 class TestSpecs:
     def test_specs_are_stably_ordered(self) -> None:
         """Stable tool order keeps the cached prompt prefix byte-identical."""
-        registry = ToolRegistry(build_infrastructure_tools(demo_environment()))
+        registry = ToolRegistry(build_inspection_tools(SimulatedInfrastructure()))
         assert [s.name for s in registry.specs()] == sorted(registry.names)
 
     def test_spec_schema_is_structured_output_compatible(self) -> None:
@@ -127,7 +127,7 @@ class TestSpecs:
 
 class TestAwsTools:
     async def test_describes_a_known_service(self) -> None:
-        registry = ToolRegistry(build_infrastructure_tools(demo_environment()))
+        registry = ToolRegistry(build_inspection_tools(SimulatedInfrastructure()))
         outcome = await registry.execute(
             ToolCall(id="1", name="describe_ecs_service", arguments={"service": "checkout-api"})
         )
@@ -136,7 +136,7 @@ class TestAwsTools:
 
     async def test_unknown_resource_lists_what_exists(self) -> None:
         """An error the model can act on beats an error it can only report."""
-        registry = ToolRegistry(build_infrastructure_tools(demo_environment()))
+        registry = ToolRegistry(build_inspection_tools(SimulatedInfrastructure()))
         outcome = await registry.execute(
             ToolCall(id="1", name="describe_ecs_service", arguments={"service": "ghost-api"})
         )
@@ -144,7 +144,7 @@ class TestAwsTools:
         assert "checkout-api" in outcome.content
 
     async def test_only_firing_alarms_are_returned(self) -> None:
-        registry = ToolRegistry(build_infrastructure_tools(demo_environment()))
+        registry = ToolRegistry(build_inspection_tools(SimulatedInfrastructure()))
         outcome = await registry.execute(
             ToolCall(id="1", name="list_active_alarms", arguments={})
         )

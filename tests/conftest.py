@@ -17,7 +17,6 @@ from aic.guardrails.policy import ActionPolicy
 from aic.llm.fake import ScriptedLLMClient
 from aic.orchestration.state import InvestigationState
 from aic.scenario import demo_incident, demo_signals
-from aic.tools.environment import demo_environment
 
 
 @pytest.fixture
@@ -28,7 +27,7 @@ def settings() -> Settings:
 @pytest.fixture
 def container(settings: Settings) -> Container:
     """The real composition root, wired to in-memory adapters."""
-    return build_container(settings, environment=demo_environment())
+    return build_container(settings)
 
 
 @pytest.fixture

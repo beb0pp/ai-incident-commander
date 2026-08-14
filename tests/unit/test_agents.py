@@ -31,9 +31,9 @@ from aic.rag.embeddings import HashingEmbedding
 from aic.rag.indexer import index_directory
 from aic.rag.retriever import RunbookRetriever
 from aic.rag.store import InMemoryVectorStore
-from aic.tools.aws import build_infrastructure_tools
-from aic.tools.environment import demo_environment
+from aic.tools.inspection import build_inspection_tools
 from aic.tools.registry import ToolRegistry
+from aic.tools.simulated import SimulatedInfrastructure
 
 
 class TestMonitoringAgent:
@@ -190,7 +190,7 @@ class TestDiagnosticAgent:
 class TestInfrastructureAgent:
     @pytest.fixture
     def registry(self) -> ToolRegistry:
-        return ToolRegistry(build_infrastructure_tools(demo_environment()))
+        return ToolRegistry(build_inspection_tools(SimulatedInfrastructure()))
 
     async def test_calls_tools_and_records_findings(
         self, scripted_llm: ScriptedLLMClient, state: InvestigationState, registry: ToolRegistry
@@ -243,7 +243,7 @@ class TestInfrastructureAgent:
         registry = ToolRegistry(
             [
                 t
-                for t in build_infrastructure_tools(demo_environment())
+                for t in build_inspection_tools(SimulatedInfrastructure())
                 if t.input_model.__name__ == "NoArgs"
             ]
         )

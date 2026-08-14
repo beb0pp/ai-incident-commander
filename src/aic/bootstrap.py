@@ -20,7 +20,6 @@ from aic.agents.monitoring import MonitoringAgent
 from aic.agents.runbook import RunbookAgent
 from aic.config import LLMProvider, Settings
 from aic.demo import build_demo_llm
-from aic.domain.models import RiskLevel
 from aic.guardrails.policy import ActionPolicy
 from aic.infrastructure.db.repository import (
     IncidentRepository,
@@ -28,6 +27,7 @@ from aic.infrastructure.db.repository import (
     PostgresIncidentRepository,
 )
 from aic.llm.base import LLMClient
+from aic.manifest import Manifest, SimulatedSource, Source, load_manifest
 from aic.orchestration.checkpoint import (
     CheckpointStore,
     InMemoryCheckpointStore,
@@ -39,9 +39,10 @@ from aic.rag.indexer import index_directory
 from aic.rag.retriever import RunbookRetriever
 from aic.rag.store import InMemoryVectorStore
 from aic.service import IncidentService
-from aic.tools.aws import build_infrastructure_tools
-from aic.tools.environment import SimulatedEnvironment, demo_environment
+from aic.tools.client import InfrastructureClient
+from aic.tools.inspection import build_inspection_tools
 from aic.tools.registry import ToolRegistry
+from aic.tools.simulated import SimulatedInfrastructure
 
 log = structlog.get_logger(__name__)
 
@@ -51,6 +52,7 @@ class Container:
     """Everything the application needs, already wired together."""
 
     settings: Settings
+    manifest: Manifest
     llm: LLMClient
     policy: ActionPolicy
     repository: IncidentRepository
@@ -78,19 +80,58 @@ def build_llm(settings: Settings) -> LLMClient:
     )
 
 
-def build_retriever(settings: Settings) -> RunbookRetriever:
+def build_retriever(settings: Settings, manifest: Manifest) -> RunbookRetriever:
+    """Index every runbook location the manifest names, plus the settings default."""
     store = InMemoryVectorStore(HashingEmbedding(dimensions=settings.embedding_dimensions))
-    chunks = index_directory(store, settings.runbook_directory)
-    log.info("rag.indexed", chunks=chunks, directory=str(settings.runbook_directory))
+
+    locations = [location.path for location in manifest.runbooks] or [
+        settings.runbook_directory
+    ]
+    total = 0
+    for path in locations:
+        total += index_directory(store, path)
+        log.info("rag.indexed", directory=str(path), chunks=total)
+
     return RunbookRetriever(store)
 
 
-def build_registry(env: SimulatedEnvironment | None = None) -> ToolRegistry:
-    """Read-only by construction — see :mod:`aic.tools.registry`."""
-    return ToolRegistry(
-        build_infrastructure_tools(env or demo_environment()),
-        max_risk=RiskLevel.READ_ONLY,
+def build_client(source: Source) -> InfrastructureClient:
+    """Turn one manifest source into a live infrastructure client."""
+    if isinstance(source, SimulatedSource):
+        return SimulatedInfrastructure()
+
+    # Imported here so the simulated path never requires the [aws] extra.
+    from aic.tools.aws import AwsInfrastructure
+
+    return AwsInfrastructure(
+        region=source.region,
+        profile=source.profile,
+        role_arn=source.role_arn,
+        max_attempts=source.max_attempts,
     )
+
+
+def build_registry(
+    manifest: Manifest, *, client: InfrastructureClient | None = None
+) -> ToolRegistry:
+    """Build the tool registry under the ceiling the manifest declares.
+
+    The ceiling is data now rather than a constant, but it is still enforced
+    where it always was: `ToolRegistry` refuses at construction time. Making
+    configuration able to *raise* the ceiling would be the mistake; making it
+    able to *declare* one that the registry then enforces is not.
+    """
+    resolved = client or build_client(manifest.sources[0])
+    registry = ToolRegistry(
+        build_inspection_tools(resolved), max_risk=manifest.effective_ceiling
+    )
+    log.info(
+        "tools.registered",
+        source=resolved.name,
+        ceiling=str(manifest.effective_ceiling),
+        tools=registry.names,
+    )
+    return registry
 
 
 def build_agents(
@@ -108,20 +149,25 @@ def build_agents(
 def build_container(
     settings: Settings,
     *,
+    manifest: Manifest | None = None,
     db_pool: Any | None = None,
     redis_client: Any | None = None,
-    environment: SimulatedEnvironment | None = None,
+    client: InfrastructureClient | None = None,
 ) -> Container:
     """Assemble the application.
 
-    ``db_pool`` and ``redis_client`` are optional: when absent, the in-memory
-    adapters are used. That is what makes the test suite and the ``fake`` demo
-    run with no services attached.
+    ``manifest`` describes what this installation is connected to; when absent
+    it is loaded from `aic.yaml`, and when that is absent too it falls back to
+    the simulated source. ``db_pool`` and ``redis_client`` are optional in the
+    same spirit — the in-memory adapters are used when they are not supplied,
+    which is what lets the tests and the demo run with no services attached.
     """
+    resolved_manifest = manifest or load_manifest(settings.manifest_path)
+
     llm = build_llm(settings)
     policy = ActionPolicy(auto_approve_max_risk=settings.auto_approve_max_risk)
-    registry = build_registry(environment)
-    retriever = build_retriever(settings)
+    registry = build_registry(resolved_manifest, client=client)
+    retriever = build_retriever(settings, resolved_manifest)
 
     repository: IncidentRepository = (
         PostgresIncidentRepository(db_pool)
@@ -151,12 +197,14 @@ def build_container(
     log.info(
         "container.built",
         llm_provider=str(settings.llm_provider),
+        sources=[s.type for s in resolved_manifest.sources],
         repository=type(repository).__name__,
         checkpoints=type(checkpoints).__name__,
         tools=registry.names,
     )
     return Container(
         settings=settings,
+        manifest=resolved_manifest,
         llm=llm,
         policy=policy,
         repository=repository,

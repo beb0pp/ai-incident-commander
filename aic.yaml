@@ -1,0 +1,22 @@
+# aic.yaml — what this installation is connected to.
+#
+# Every source declares its own risk ceiling. Investigation tools are read-only
+# by construction: the registry refuses at startup to hold anything above the
+# ceiling, so this file is the only place that decision is made, and it is a
+# decision that shows up in code review.
+
+sources:
+  # The bundled fixture environment. Works with no credentials.
+  - type: simulated
+
+  # A live AWS account. Uncomment and adjust.
+  # - type: aws
+  #   region: sa-east-1
+  #   # Omit `profile` in a deployment: the default credential chain picks up
+  #   # the ECS task role or EC2 instance profile, with nothing to store.
+  #   profile: prophub-readonly
+  #   # Set `role_arn` when the account you watch is not the account you run in.
+  #   # role_arn: arn:aws:iam::123456789012:role/incident-commander-readonly
+
+runbooks:
+  - path: ./docs/runbooks

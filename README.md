@@ -17,8 +17,53 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 ```
 
 `aic demo` runs a complete investigation with a deterministic scripted model — no
-API key, no database, no docker. Point `AIC_LLM_PROVIDER=anthropic` at a real key
-and the same code path runs against Claude.
+API key, no database, no docker.
+
+## Connecting it to your environment
+
+Adoption is a YAML file, not a subclass. `aic init` writes it, `aic doctor` tells
+you what is missing before an incident does:
+
+```bash
+pip install "ai-incident-commander[aws]"
+aic init                 # writes aic.yaml
+aic doctor               # checks credentials, permissions, connectivity
+```
+
+```yaml
+# aic.yaml
+sources:
+  - type: aws
+    region: sa-east-1
+    # Omit `profile` in a deployment: the default credential chain picks up the
+    # ECS task role or EC2 instance profile, with nothing to store.
+    profile: prophub-readonly
+    # Set `role_arn` when the account you watch is not the account you run in.
+    # role_arn: arn:aws:iam::123456789012:role/incident-commander-readonly
+
+runbooks:
+  - path: ./ops/runbooks
+```
+
+`doctor` reports one line per capability, and a denial names the IAM action that
+would fix it:
+
+```
+aws(sa-east-1, prophub-readonly)
+  [  ok  ] credentials  arn:aws:iam::123456789012:role/reader (account 123456789012)
+  [ DENY ] alarms       IAM denied cloudwatch:describe_alarms — no identity-based policy allows it
+  [  ok  ] deployments
+
+Add these IAM actions and run doctor again:
+  - cloudwatch:DescribeAlarms
+```
+
+It exits non-zero when anything fails, so it works as a deployment gate.
+
+**Adding a source that is not AWS** means implementing one protocol —
+`InfrastructureClient`, six read-only methods — and adding a `type` to the
+manifest. It does not mean touching the tools, the registry, the agents, or the
+prompts.
 
 ---
 
@@ -117,13 +162,15 @@ Full write-up: [`docs/architecture.md`](docs/architecture.md).
 src/aic/
 ├── domain/          # entities and value objects — no framework, no I/O
 ├── llm/             # the LLM port + Anthropic adapter + scripted client
-├── tools/           # tool contracts, registry, simulated AWS environment
+├── tools/           # the infrastructure port, registry, AWS + simulated sources
 ├── rag/             # embeddings, vector store, chunking, retrieval
 ├── agents/          # the five agents and their prompts
 ├── guardrails/      # risk classification and the approval gate
 ├── orchestration/   # DAG engine, state, checkpointing, the pipeline
 ├── infrastructure/  # persistence and observability adapters
 ├── api/             # FastAPI routes and wire schemas
+├── manifest.py      # aic.yaml — what this installation is connected to
+├── diagnostics.py   # `aic doctor` probes
 ├── bootstrap.py     # composition root — every dependency is built here
 └── service.py       # use cases, independent of HTTP
 ```
@@ -180,6 +227,7 @@ Each of these has an ADR in [`docs/adr/`](docs/adr/):
 | [A manual tool loop](docs/adr/0003-structured-outputs-and-tool-loop.md) over the SDK tool runner | More code, but the loop is where retries, auditing, and guardrail hooks live — and no beta dependency |
 | [In-process vector store](docs/adr/0004-in-process-rag.md) over a vector database | Exact search, zero infrastructure, hermetic tests; caps out at a corpus that fits in RAM |
 | [SQL migrations](docs/adr/0005-jsonb-persistence.md) over an ORM + Alembic | Less machinery for a two-table JSONB schema; no ORM query layer if the schema normalizes later |
+| [Declarative manifest](docs/adr/0006-declarative-manifest.md) over code-level wiring | Adoption is a YAML file; the safety ceiling becomes data, enforced in three places instead of hard-coded in one |
 | [Guardrails recompute risk](docs/adr/0001-human-in-the-loop.md) | The model's risk assessment is never load-bearing, at the cost of maintaining classification patterns |
 
 ---
@@ -214,10 +262,12 @@ into being wrong. So the safety properties are structural rather than prompted:
 
 ### Limitations — stated plainly
 
-- **The AWS environment is simulated.** `SimulatedEnvironment` returns fixtures
-  shaped like real `boto3` responses. The agent architecture is the subject of
-  this project; a live cloud integration is a credentials problem, not an
-  engineering one, and it would make the repo unclonable.
+- **The AWS source is real but lightly exercised.** `AwsInfrastructure` calls
+  boto3 for ECS, RDS, ElastiCache, SQS, and CloudWatch, and translates IAM
+  denials into the action you need to add. It has been verified against the
+  simulated source and the error paths; it has not yet run a full investigation
+  against a production account. The simulated source remains the default so the
+  repo stays clonable with no credentials.
 - **Nothing executes.** There is no executor. `assert_executable` exists so that
   one added later cannot skip the gate, but this repository proposes and stops.
 - **The embedder is lexical, not semantic.** `HashingEmbedding` matches
@@ -345,11 +395,12 @@ curl -sX POST localhost:8000/incidents/$ID/actions/$ACTION_ID/decision \
 - **Async investigations.** Enqueue on `POST /incidents`, return `202`, stream
   progress over SSE. The checkpoint store already supports it; the API does not
   yet use it.
-- **MCP tool transport.** Expose the read-only tools over MCP so the same
-  contracts serve other agent clients, and consume third-party MCP servers as
-  additional evidence sources.
-- **A real AWS adapter** behind the existing `SimulatedEnvironment` seam, gated
-  to read-only IAM.
+- **MCP as a source type.** `- type: mcp` in the manifest, so any MCP server
+  becomes a tool surface without writing an adapter at all — with a per-server
+  allowlist, since MCP tools do not declare their own blast radius.
+- **Signal collectors.** A `triggers:` section so a CloudWatch alarm or a
+  PagerDuty webhook assembles its own signal window, removing the ingest
+  Lambda an adopter currently has to write.
 - **An executor** for approved actions, behind `assert_executable`, with a
   dry-run mode and automatic rollback on failed verification.
 - **Semantic embeddings + pgvector**, once the runbook corpus outgrows the
