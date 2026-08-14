@@ -61,9 +61,13 @@ Add these IAM actions and run doctor again:
 It exits non-zero when anything fails, so it works as a deployment gate.
 
 **Adding a source that is not AWS** means implementing one protocol —
-`InfrastructureClient`, six read-only methods — and adding a `type` to the
-manifest. It does not mean touching the tools, the registry, the agents, or the
-prompts.
+`InfrastructureClient` — and adding a `type` to the manifest. It does not mean
+touching the tools, the registry, the agents, or the prompts.
+
+[`docs/integration-contract.md`](docs/integration-contract.md) states what the
+platform needs from an environment as vendor-neutral capabilities, with the
+market tools that commonly provide each one — plus the questions worth asking
+about an environment *before* adopting it.
 
 ---
 
@@ -403,6 +407,12 @@ curl -sX POST localhost:8000/incidents/$ID/actions/$ACTION_ID/decision \
   Lambda an adopter currently has to write.
 - **An executor** for approved actions, behind `assert_executable`, with a
   dry-run mode and automatic rollback on failed verification.
+- **`search_logs` capability.** Metrics say *that* something broke; logs say
+  *what*. Bounded queries against Logs Insights, Loki, or Elasticsearch.
+- **`query_system_of_record` capability.** Telemetry retention is short and
+  incidents get reported late, so the application database is often the only
+  durable evidence left. Read-only, against a replica, parameterized, with a
+  row cap and column exclusions enforced by the tool.
 - **Semantic embeddings + pgvector**, once the runbook corpus outgrows the
   process.
 - **Evaluation harness.** A fixture set of incidents with known root causes,
