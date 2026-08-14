@@ -15,7 +15,15 @@ from aic.agents.monitoring import AnomalyDraft, MonitoringAgent, MonitoringOutpu
 from aic.agents.runbook import RunbookAgent, RunbookSelection, SelectedRunbook
 from aic.config import Settings
 from aic.domain.errors import LLMError
-from aic.domain.models import IncidentStatus, RiskLevel, Severity, SignalKind
+from aic.domain.models import (
+    Hypothesis,
+    IncidentStatus,
+    InfrastructureFinding,
+    RiskLevel,
+    RunbookMatch,
+    Severity,
+    SignalKind,
+)
 from aic.guardrails.policy import ActionPolicy
 from aic.llm.fake import ScriptedLLMClient, call_every_tool
 from aic.orchestration.state import InvestigationState
@@ -352,6 +360,94 @@ class TestActionAgent:
         assert state.plan is not None
         assert state.plan.actions == []
         assert any("guardrails" in error for error in state.errors)
+
+    async def test_evidence_is_labelled_with_where_it_actually_came_from(
+        self, scripted_llm: ScriptedLLMClient, state: InvestigationState
+    ) -> None:
+        """Provenance has to be right, or the audit trail sends readers astray."""
+        state.hypotheses = [
+            Hypothesis(title="pool exhaustion", reasoning="r", confidence=0.72)
+        ]
+        state.findings = [
+            InfrastructureFinding(
+                tool="describe_rds_instance",
+                resource="prod-aurora-orders",
+                summary="connections at 199/200",
+                healthy=False,
+            )
+        ]
+        state.runbooks = [
+            RunbookMatch(
+                document_id="database-connection-exhaustion#4",
+                title="Database Connection Pool Exhaustion — Rollback",
+                excerpt="…",
+                score=0.21,
+            )
+        ]
+        cited = [
+            state.hypotheses[0].id,
+            state.findings[0].id,
+            state.runbooks[0].document_id,
+        ]
+
+        scripted_llm.register(
+            ActionPlanDraft,
+            lambda _: ActionPlanDraft(
+                summary="roll it back",
+                actions=[
+                    ActionDraft(
+                        title="rollback",
+                        description="revert the deploy",
+                        command="aws ecs update-service --cluster prod --service checkout-api",
+                        declared_risk=RiskLevel.MEDIUM,
+                        rationale="smallest reversible change",
+                        evidence_refs=cited,
+                    )
+                ],
+            ),
+        )
+
+        await ActionAgent(scripted_llm, ActionPolicy()).run(state)
+
+        assert state.plan is not None
+        evidence = state.plan.actions[0].evidence
+        assert [e.source for e in evidence] == ["hypothesis", "tool", "runbook"]
+        assert [e.reference for e in evidence] == cited
+        # The detail is readable on its own, not a bare uuid.
+        assert "pool exhaustion" in evidence[0].detail
+        assert "0.72" in evidence[0].detail
+        assert "prod-aurora-orders" in evidence[1].detail
+        assert "Rollback" in evidence[2].detail
+
+    async def test_an_invented_reference_is_dropped_and_reported(
+        self, scripted_llm: ScriptedLLMClient, state: InvestigationState
+    ) -> None:
+        """Recording a false citation would be worse than recording none."""
+        state.hypotheses = [Hypothesis(title="real one", reasoning="r", confidence=0.6)]
+
+        scripted_llm.register(
+            ActionPlanDraft,
+            lambda _: ActionPlanDraft(
+                summary="s",
+                actions=[
+                    ActionDraft(
+                        title="rollback",
+                        description="d",
+                        command="aws ecs update-service --cluster prod --service checkout",
+                        declared_risk=RiskLevel.MEDIUM,
+                        rationale="r",
+                        evidence_refs=[state.hypotheses[0].id, "totally-made-up-id"],
+                    )
+                ],
+            ),
+        )
+
+        await ActionAgent(scripted_llm, ActionPolicy()).run(state)
+
+        assert state.plan is not None
+        evidence = state.plan.actions[0].evidence
+        assert [e.reference for e in evidence] == [state.hypotheses[0].id]
+        assert any("totally-made-up-id" in error for error in state.errors)
 
     async def test_an_all_read_only_plan_needs_no_approval(
         self, scripted_llm: ScriptedLLMClient, state: InvestigationState

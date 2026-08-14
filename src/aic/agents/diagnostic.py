@@ -8,7 +8,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from aic.agents.base import Agent
 from aic.agents.prompts import DIAGNOSTIC_SYSTEM
-from aic.domain.models import Confidence, Evidence, Hypothesis, ServiceRef
+from aic.domain.models import (
+    EVIDENCE_SOURCES,
+    Confidence,
+    Evidence,
+    Hypothesis,
+    ServiceRef,
+)
 from aic.orchestration.state import InvestigationState
 
 MAX_HYPOTHESES = 5
@@ -73,11 +79,10 @@ class DiagnosticAgent(Agent):
 
 def _coerce_evidence(drafts: list[EvidenceDraft]) -> list[Evidence]:
     """Keep only evidence whose source is one the domain model recognises."""
-    valid = {"signal", "anomaly", "tool", "runbook"}
     return [
         Evidence(source=d.source, detail=d.detail, reference=d.reference)  # type: ignore[arg-type]
         for d in drafts
-        if d.source in valid
+        if d.source in EVIDENCE_SOURCES
     ]
 
 

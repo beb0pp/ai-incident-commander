@@ -73,9 +73,14 @@ class ActionAgent(Agent):
         for signal in state.signals:
             services.setdefault(signal.service.name, signal.service)
 
-        raw_plan = ActionPlan(
-            summary=draft.summary,
-            actions=[
+        index = _evidence_index(state)
+        actions: list[ProposedAction] = []
+        unresolved: list[str] = []
+
+        for item in draft.actions:
+            evidence = [index[ref] for ref in item.evidence_refs if ref in index]
+            unresolved.extend(ref for ref in item.evidence_refs if ref not in index)
+            actions.append(
                 ProposedAction(
                     title=item.title,
                     description=item.description,
@@ -88,14 +93,26 @@ class ActionAgent(Agent):
                     risk=item.declared_risk,
                     rationale=item.rationale,
                     rollback=item.rollback,
-                    evidence=[
-                        Evidence(source="tool", reference=ref, detail="cited by action agent")
-                        for ref in item.evidence_refs
-                    ],
+                    evidence=evidence,
                 )
-                for item in draft.actions
-            ],
-        )
+            )
+
+        if unresolved:
+            # An action citing something this investigation never produced is a
+            # broken audit trail. Drop the citation rather than record a false
+            # one, and surface it — silently discarding it would hide the very
+            # failure mode the evidence model exists to catch.
+            state.errors.append(
+                "action: dropped evidence references that match nothing in this "
+                f"investigation: {sorted(set(unresolved))}"
+            )
+            self.log.warning(
+                "action.unresolved_evidence",
+                references=sorted(set(unresolved)),
+                run_id=state.run_id,
+            )
+
+        raw_plan = ActionPlan(summary=draft.summary, actions=actions)
 
         plan, decisions = self._policy.apply(raw_plan)
         state.plan = plan
@@ -118,6 +135,40 @@ class ActionAgent(Agent):
             awaiting_approval=needs_human,
             run_id=state.run_id,
         )
+
+
+def _evidence_index(state: InvestigationState) -> dict[str, Evidence]:
+    """Map every id the model could have cited back onto what produced it.
+
+    The keys are exactly the ids rendered into the prompt, so a reference that
+    misses this index is one the model invented. Each entry carries a readable
+    ``detail`` too — "the hypothesis about pool exhaustion, at 0.72 confidence"
+    is worth more to a responder than a bare uuid.
+    """
+    index: dict[str, Evidence] = {}
+
+    for anomaly in state.anomalies:
+        index[anomaly.id] = Evidence(
+            source="anomaly", reference=anomaly.id, detail=anomaly.summary
+        )
+    for hypothesis in state.hypotheses:
+        index[hypothesis.id] = Evidence(
+            source="hypothesis",
+            reference=hypothesis.id,
+            detail=f"{hypothesis.title} (confidence {hypothesis.confidence:.2f})",
+        )
+    for finding in state.findings:
+        index[finding.id] = Evidence(
+            source="tool",
+            reference=finding.id,
+            detail=f"{finding.tool} on {finding.resource}: {finding.summary}",
+        )
+    for runbook in state.runbooks:
+        index[runbook.document_id] = Evidence(
+            source="runbook", reference=runbook.document_id, detail=runbook.title
+        )
+
+    return index
 
 
 def _build_prompt(state: InvestigationState) -> str:

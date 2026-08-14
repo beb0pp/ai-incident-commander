@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -125,14 +125,25 @@ class Anomaly(_Frozen):
     score: Confidence = 0.5
 
 
+#: What kind of thing a piece of evidence points at. An action is commonly
+#: justified by a hypothesis, so that is a source in its own right — labelling
+#: one as a tool result would make the provenance wrong.
+EvidenceSource = Literal["signal", "anomaly", "tool", "runbook", "hypothesis"]
+
+EVIDENCE_SOURCES: frozenset[str] = frozenset(get_args(EvidenceSource))
+
+
 class Evidence(_Frozen):
     """A pointer back to what a conclusion was actually based on.
 
     Every hypothesis and every proposed action must cite evidence. This is the
-    mechanism that keeps output auditable rather than merely plausible-sounding.
+    mechanism that keeps output auditable rather than merely plausible-sounding,
+    and it only works if ``source`` is accurate: a reader following the trail
+    needs to know whether they are being sent to raw telemetry, to a fact a tool
+    established, or to another inference.
     """
 
-    source: Literal["signal", "anomaly", "tool", "runbook"]
+    source: EvidenceSource
     reference: str
     detail: str
 

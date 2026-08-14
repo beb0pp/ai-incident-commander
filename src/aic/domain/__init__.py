@@ -8,10 +8,12 @@ from aic.domain.errors import (
     ToolExecutionError,
 )
 from aic.domain.models import (
+    EVIDENCE_SOURCES,
     ActionPlan,
     Anomaly,
     ApprovalDecision,
     Evidence,
+    EvidenceSource,
     Hypothesis,
     Incident,
     IncidentStatus,
@@ -26,6 +28,7 @@ from aic.domain.models import (
 )
 
 __all__ = [
+    "EVIDENCE_SOURCES",
     "ActionPlan",
     "AgentError",
     "Anomaly",
@@ -33,6 +36,7 @@ __all__ = [
     "ApprovalRequiredError",
     "DomainError",
     "Evidence",
+    "EvidenceSource",
     "GuardrailViolationError",
     "Hypothesis",
     "Incident",
